@@ -84,6 +84,7 @@ class DINOv3EoMTSemanticSegmentationTrainTransformArgs(
     scale_jitter: ScaleJitterArgs | None = Field(
         default_factory=DINOv3EoMTSemanticSegmentationScaleJitterArgs
     )
+    random_scale: tuple[float, float] | None = None
     smallest_max_size: SmallestMaxSizeArgs | None = None
     random_crop: RandomCropArgs = Field(
         default_factory=DINOv3EoMTSemanticSegmentationRandomCropArgs
@@ -123,13 +124,15 @@ class DINOv3EoMTSemanticSegmentationValTransformArgs(SemanticSegmentationTransfo
     """
 
     image_size: tuple[int, int] | Literal["auto"] = "auto"
+    stride_size: tuple[int, int] | Literal["auto"] = "auto"
     channel_drop: ChannelDropArgs | None = None
     num_channels: int | Literal["auto"] = "auto"
     normalize: NormalizeArgs | Literal["auto"] = "auto"
     random_flip: RandomFlipArgs | None = None
     color_jitter: ColorJitterArgs | None = None
     scale_jitter: ScaleJitterArgs | None = None
-    smallest_max_size: SmallestMaxSizeArgs = Field(
+    random_scale: tuple[float, float] | None = None
+    smallest_max_size: SmallestMaxSizeArgs | None = Field(
         default_factory=DINOv3EoMTSemanticSegmentationSmallestMaxSizeArgs
     )
     random_crop: RandomCropArgs | None = None
@@ -140,6 +143,9 @@ class DINOv3EoMTSemanticSegmentationValTransformArgs(SemanticSegmentationTransfo
             image_size = model_init_args.get("image_size", (518, 518))
             assert isinstance(image_size, tuple)
             self.image_size = image_size
+
+        if self.stride_size == "auto":
+            self.stride_size = self.image_size[0] * 3 // 4, self.image_size[1] * 3 // 4
 
         height, width = self.image_size
         for field_name in self.__class__.model_fields:

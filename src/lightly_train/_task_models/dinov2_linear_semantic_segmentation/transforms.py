@@ -130,7 +130,7 @@ class DINOv2LinearSemanticSegmentationValTransformArgs(
     random_flip: RandomFlipArgs | None = None
     color_jitter: ColorJitterArgs | None = None
     scale_jitter: ScaleJitterArgs | None = None
-    smallest_max_size: SmallestMaxSizeArgs = Field(
+    smallest_max_size: SmallestMaxSizeArgs | None = Field(
         default_factory=DINOv2LinearSemanticSegmentationSmallestMaxSizeArgs
     )
     random_crop: RandomCropArgs | None = None

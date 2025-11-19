@@ -77,6 +77,7 @@ class MaskSemanticSegmentationDataset(TaskDataset):
             transform=transform, dataset_args=dataset_args, image_info=image_info
         )
         self.ignore_index = dataset_args.ignore_index
+        self.valid_threshold = dataset_args.valid_threshold
 
         # Get the class mapping.
         self.class_id_to_internal_class_id = (
@@ -114,7 +115,12 @@ class MaskSemanticSegmentationDataset(TaskDataset):
     def is_mask_valid(self, mask: Tensor) -> bool:
         # Check if at least one value in the mask is in the valid classes.
         unique_classes: Tensor = mask.unique()  # type: ignore[no-untyped-call]
-        return bool(torch.isin(unique_classes, self.valid_classes).any())
+        valids = torch.isin(unique_classes, self.valid_classes)
+        if isinstance(self.valid_threshold, int):
+            return bool(valids.sum() > self.valid_threshold)
+        elif isinstance(self.valid_threshold, float):
+            return bool(valids.float().mean() > self.valid_threshold)
+        raise NotImplementedError
 
     def get_binary_masks(self, mask: Tensor) -> BinaryMasksDict:
         # This follows logic from:
@@ -247,6 +253,8 @@ class MaskSemanticSegmentationDataset(TaskDataset):
         for _ in range(20):
             # (H, W, C) -> (C, H, W)
             transformed = self.transform({"image": image, "mask": mask})
+            if 'train' not in type(self.transform).__name__.lower():
+                break
             if self.is_mask_valid(transformed["mask"]):
                 break
 
@@ -272,6 +280,7 @@ class MaskSemanticSegmentationDatasetArgs(TaskDatasetArgs):
     classes: dict[int, ClassInfo]
     # Disable strict to allow pydantic to convert lists/tuples to sets.
     ignore_classes: set[int] | None = Field(default=None, strict=False)
+    valid_threshold: float
     ignore_index: int
 
     def list_image_info(self) -> Iterable[dict[str, str]]:
@@ -310,6 +319,7 @@ class MaskSemanticSegmentationDataArgs(TaskDataArgs):
     val: SplitArgs
     classes: dict[int, ClassInfo]
     ignore_classes: set[int] | None = Field(default=None, strict=False)
+    valid_threshold: float = 0.1
 
     def train_imgs_path(self) -> Path:
         return Path(self.train.images)
@@ -427,6 +437,7 @@ class MaskSemanticSegmentationDataArgs(TaskDataArgs):
             mask_dir_or_file=str(self.train.masks),
             classes=self.classes,
             ignore_classes=self.ignore_classes,
+            valid_threshold=self.valid_threshold,
             ignore_index=self.ignore_index,
         )
 
@@ -438,5 +449,6 @@ class MaskSemanticSegmentationDataArgs(TaskDataArgs):
             mask_dir_or_file=str(self.val.masks),
             classes=self.classes,
             ignore_classes=self.ignore_classes,
+            valid_threshold=self.valid_threshold,
             ignore_index=self.ignore_index,
         )
