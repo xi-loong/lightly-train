@@ -124,12 +124,14 @@ class TIMMEoMTSemanticSegmentation(TaskModel):
             load_weights=load_weights,
         )
         embed_dim = self.backbone.embed_dim
-        self.patch_size = self.backbone.patch_size
+        self.patch_size = self.backbone.patch_embed.patch_size[0]
+        for patch_size in self.backbone.patch_embed.patch_size:
+            assert self.patch_size == patch_size
 
         # TODO(Guarin, 07/25): Improve how mask tokens are handled for fine-tuning.
         # Should we drop them from the model? We disable grads here for DDP to work
         # without find_unused_parameters=True.
-        self.backbone.mask_token.requires_grad = False
+        # self.backbone.mask_token.requires_grad = False
 
         # Load the backbone weights if a path is provided.
         # TODO(Thomas,07/2026): this should be done in the package.
@@ -286,7 +288,7 @@ class TIMMEoMTSemanticSegmentation(TaskModel):
         self, x: Tensor, return_logits_per_layer: bool
     ) -> tuple[list[Tensor], list[Tensor]]:
         _, _, H, W = x.shape
-        patch_size = self.backbone.patch_size
+        patch_size = self.patch_size
 
         # Match the logic of the PatchEmbded forward
         # (src/lightly_train/_models/timm/timm/layers/patch_embed.py).
