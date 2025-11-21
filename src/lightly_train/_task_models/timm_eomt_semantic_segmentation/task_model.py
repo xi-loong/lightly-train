@@ -283,6 +283,13 @@ class TIMMEoMTSemanticSegmentation(TaskModel):
         masks = self.internal_class_to_class[masks]
         return masks, logits
 
+    def prepare_tokens_with_masks(self, x):
+        x = self.backbone.patch_embed(x)
+        x = self.backbone._pos_embed(x)
+        x = self.backbone.patch_drop(x)
+        x = self.backbone.norm_pre(x)
+        return x
+
     # TODO(Guarin, 07/25): Refactor to take attn_mask_probs as input.
     def forward_train(
         self, x: Tensor, return_logits_per_layer: bool
@@ -294,7 +301,7 @@ class TIMMEoMTSemanticSegmentation(TaskModel):
         # (src/lightly_train/_models/timm/timm/layers/patch_embed.py).
         grid_size = (math.ceil(H / patch_size), math.ceil(W / patch_size))
 
-        x = self.backbone.prepare_tokens_with_masks(x)  # type: ignore[no-untyped-call]
+        x = self.prepare_tokens_with_masks(x)  # type: ignore[no-untyped-call]
         mask_logits_per_layer, class_logits_per_layer = [], []
 
         for i, block in enumerate(self.backbone.blocks):
@@ -352,16 +359,7 @@ class TIMMEoMTSemanticSegmentation(TaskModel):
                             i - len(self.backbone.blocks) + self.num_joint_blocks
                         ],
                     )
-
-            # This mirrors forward of TIMM Block.
-            if self.training and block.sample_drop_ratio > 0:  # type: ignore[operator]
-                x = x + block.drop_path1(  # type: ignore[operator]
-                    block.ls1(self._attn(block.attn, block.norm1(x), attn_mask))  # type: ignore
-                )
-                x = x + block.drop_path1(block.ls2(block.mlp(block.norm2(x))))  # type: ignore[operator]
-            else:
-                x = x + block.ls1(self._attn(block.attn, block.norm1(x), attn_mask))  # type: ignore
-                x = x + block.ls2(block.mlp(block.norm2(x)))  # type: ignore[operator]
+            x = block(x, attn_mask=attn_mask)
 
         mask_logits, class_logits = self._predict(
             self.backbone.norm(x), grid_size=grid_size
@@ -537,11 +535,6 @@ class TIMMEoMTSemanticSegmentation(TaskModel):
             ][random_queries] = True
 
         return attn_mask
-
-    # TODO(Guarin, 07/25): Add support for attention masks directly to Attention class?
-    def _attn(self, module: Attention, x: Tensor, mask: Tensor | None) -> Tensor:
-        # This mirrors TIMM Attention forward but with mask support.
-        return module(x, mask)
 
     def load_backbone_weights(self, path: PathLike) -> None:
         """
