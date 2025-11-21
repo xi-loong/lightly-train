@@ -402,6 +402,7 @@ class DINOv3EoMTSemanticSegmentationTrain(TrainModel):
             end_idx = start_idx + batch_size
             batch_crops = crops[start_idx:end_idx]
             batch_binary_masks_crops_dicts = binary_masks_crops_dicts[start_idx:end_idx]
+            batch_invalid_crops = invalid_crops[start_idx:end_idx]
             batch_mask_logits_per_layer, batch_class_logits_per_layer = self.model.forward_train(
                 batch_crops, return_logits_per_layer=True
             )
@@ -438,17 +439,6 @@ class DINOv3EoMTSemanticSegmentationTrain(TrainModel):
                 targets=masks,
                 block_idx=i,
             )
-
-            # Compute the loss
-            block_losses = self.criterion(
-                masks_queries_logits=mask_logits,
-                class_queries_logits=class_logits,
-                targets=binary_masks_crops_dicts,
-                invalids = invalid_crops
-            )
-            block_suffix = f"_block{block_idx}" if block_idx < num_blocks else ""
-            block_losses = {f"{k}{block_suffix}": v for k, v in block_losses.items()}
-            losses.update(block_losses)
 
         # Compute the total loss.
         # loss = self.criterion.loss_total(losses_all_layers=losses)
