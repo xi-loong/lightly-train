@@ -57,12 +57,13 @@ class TIMMPackage(Package):
             raise ValueError(
                 f"Cannot create model '{model_name}' because timm is not installed."
             )
-        args: dict[str, Any] = dict(pretrained=False, in_chans=num_input_channels)
+        args: dict[str, Any] = dict(pretrained=True, in_chans=num_input_channels)
         # vit and eva models have dynamic_img_size defaulting to False, which would not allow inputs with varying image sizes, e.g., for DINO
         if (
             model_name.startswith("vit")
             or model_name.startswith("eva")
             or model_name.startswith("deit")
+            or model_name in ['hf-hub:bioptimus/H-optimus-0']
         ):
             args.update({"dynamic_img_size": True})
         if model_args is not None:
