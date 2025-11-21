@@ -21,6 +21,7 @@ from albumentations import (
     RandomCrop,
     Resize,
     SmallestMaxSize,
+    RandomScale,
     VerticalFlip,
 )
 from albumentations.pytorch import ToTensorV2
@@ -45,7 +46,7 @@ from lightly_train._transforms.transform import (
     ScaleJitterArgs,
     SmallestMaxSizeArgs,
 )
-from lightly_train.types import ImageSizeTuple, NDArrayImage, NDArrayMask
+from lightly_train.types import NDArrayImage, NDArrayMask
 
 logger = logging.getLogger(__name__)
 
@@ -62,7 +63,7 @@ class SemanticSegmentationTransformOutput(TaskTransformOutput):
 
 class SemanticSegmentationTransformArgs(TaskTransformArgs):
     ignore_index: int
-    image_size: ImageSizeTuple | Literal["auto"]
+    image_size: tuple[int, int] | Literal["auto"]
     channel_drop: ChannelDropArgs | None
     num_channels: int | Literal["auto"]
     normalize: NormalizeArgs | Literal["auto"]
@@ -70,6 +71,7 @@ class SemanticSegmentationTransformArgs(TaskTransformArgs):
     color_jitter: ColorJitterArgs | None
     # TODO: Lionel(09/25): These are currently not fully used.
     scale_jitter: ScaleJitterArgs | None
+    random_scale: tuple[float, float] | None
     smallest_max_size: SmallestMaxSizeArgs | None
     random_crop: RandomCropArgs | None
 
@@ -162,6 +164,9 @@ class SemanticSegmentationTransform(TaskTransform):
                     p=transform_args.scale_jitter.prob,
                 )
             ]
+
+        if transform_args.random_scale is not None:
+            transform += [RandomScale(scale_limit=transform_args.random_scale, p=1)]
 
         # During training we randomly crop the image to a fixed size
         # without changing the aspect ratio.
