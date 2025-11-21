@@ -134,13 +134,13 @@ def get_package_from_model(
 
 def parse_model_name(model: str) -> tuple[str, str]:
     parts = model.split("/")
-    if len(parts) != 2:
+    if len(parts) < 2:
         raise ValueError(
             "Model name has incorrect format. Should be 'package/model' but is "
             f"'{model}'"
         )
     package_name = parts[0]
-    model_name = parts[1]
+    model_name = "/".join(parts[1:])
     if package_name == "dinov2_vit":  # For backwards compatibility.
         package_name = "dinov2"
     return package_name, model_name
