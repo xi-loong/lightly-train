@@ -351,7 +351,7 @@ class TIMMEoMTSemanticSegmentation(TaskModel):
                     attn_mask[
                         :,
                         : self.num_queries,
-                        self.num_queries + 1 + self.backbone.num_register_tokens :,
+                        self.num_queries + 1 + self.backbone.num_reg_tokens :,
                     ] = interpolated > 0
                     attn_mask = self._disable_attn_mask(
                         attn_mask=attn_mask,
@@ -564,7 +564,7 @@ class TIMMEoMTSemanticSegmentation(TaskModel):
             attn_mask[
                 :,
                 : self.num_queries,
-                self.num_queries + 1 + self.backbone.num_register_tokens :,
+                self.num_queries + 1 + self.backbone.num_reg_tokens :,
             ][random_queries] = True
 
         return attn_mask
