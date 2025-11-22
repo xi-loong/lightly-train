@@ -358,7 +358,7 @@ class TIMMEoMTSemanticSegmentation(TaskModel):
                         prob=self.attn_mask_probs[
                             i - len(self.backbone.blocks) + self.num_joint_blocks
                         ],
-                    )
+                    ).unsqueeze(1)
             x = block(x, attn_mask=attn_mask)
 
         mask_logits, class_logits = self._predict(
