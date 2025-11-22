@@ -189,6 +189,7 @@ class TIMMEoMTSemanticSegmentationTrain(TrainModel):
         num_queries = no_auto(self.model_args.num_queries)
         num_joint_blocks = no_auto(self.model_args.num_joint_blocks)
         image_size = no_auto(val_transform_args.image_size)
+        stride_size = no_auto(val_transform_args.stride_size)
         normalize = no_auto(val_transform_args.normalize)
 
         self.model = TIMMEoMTSemanticSegmentation(
@@ -199,6 +200,7 @@ class TIMMEoMTSemanticSegmentationTrain(TrainModel):
                 data_args.ignore_index if data_args.ignore_classes else None
             ),
             image_size=image_size,
+            stride_size=stride_size,
             image_normalize=normalize.model_dump(),
             num_queries=num_queries,
             num_joint_blocks=num_joint_blocks,
@@ -282,6 +284,7 @@ class TIMMEoMTSemanticSegmentationTrain(TrainModel):
         assert isinstance(images, Tensor), "Images must be a single tensor for training"
         masks = batch["mask"]
         binary_masks = batch["binary_masks"]
+        invalids = [(mask == self.model.class_ignore_index).unsqueeze(0) for mask in masks]
         _, _, H, W = images.shape
 
         mask_logits_per_layer, class_logits_per_layer = self.model.forward_train(
@@ -301,6 +304,7 @@ class TIMMEoMTSemanticSegmentationTrain(TrainModel):
                 masks_queries_logits=block_mask_logits,
                 class_queries_logits=block_class_logits,
                 targets=binary_masks,
+                invalids=invalids,
             )
             block_suffix = f"_block{block_idx}" if block_idx < num_blocks else ""
             block_losses = {f"{k}{block_suffix}": v for k, v in block_losses.items()}
@@ -372,6 +376,7 @@ class TIMMEoMTSemanticSegmentationTrain(TrainModel):
         images = batch["image"]
         masks = batch["mask"]
         binary_masks = batch["binary_masks"]
+        invalids = [(mask == self.model.class_ignore_index).unsqueeze(0) for mask in masks]
         image_sizes = [(image.shape[-2], image.shape[-1]) for image in images]
 
         # Tile the images.
@@ -381,10 +386,12 @@ class TIMMEoMTSemanticSegmentationTrain(TrainModel):
         # Tile the binary masks for the loss
         binary_masks_labels = [m["labels"] for m in binary_masks]
         binary_masks_crops, _ = self.model.tile([m["masks"] for m in binary_masks])
+        invalid_crops_list, _ = self.model.tile(invalids)
+        invalid_crops = torch.stack(invalid_crops_list)
 
         # Compute the target per crop.
         binary_masks_crops_dicts = []
-        for origin, binary_masks_crop in zip(origins, binary_masks_crops):
+        for origin, binary_masks_crop in zip(origins[0], binary_masks_crops):
             # Store the binary mask and label for the crop.
             binary_masks_crops_dicts.append(
                 {
@@ -393,32 +400,45 @@ class TIMMEoMTSemanticSegmentationTrain(TrainModel):
                 }
             )
 
-        mask_logits_per_layer, class_logits_per_layer = self.model.forward_train(
-            crops, return_logits_per_layer=True
-        )
+        batch_size = len(images)
         num_blocks = len(self.model.backbone.blocks)
         losses = {}
-        for i, (block_idx, mask_logits, class_logits) in enumerate(
-            zip(
-                # Add +1 to num_blocks for final output.
-                range(num_blocks - num_joint_blocks, num_blocks + 1),
-                mask_logits_per_layer,
-                class_logits_per_layer,
+        crop_logits_per_layer = [[] for _ in range(num_joint_blocks + 1)]
+        for start_idx in range(0, len(crops), batch_size):
+            end_idx = start_idx + batch_size
+            batch_crops = crops[start_idx:end_idx]
+            batch_binary_masks_crops_dicts = binary_masks_crops_dicts[start_idx:end_idx]
+            batch_invalid_crops = invalid_crops[start_idx:end_idx]
+            batch_mask_logits_per_layer, batch_class_logits_per_layer = self.model.forward_train(
+                batch_crops, return_logits_per_layer=True
             )
-        ):
+            for i, (batch_block_idx, batch_mask_logits, batch_class_logits) in enumerate(
+                    zip(
+                        # Add +1 to num_blocks for final output.
+                        range(num_blocks - num_joint_blocks, num_blocks + 1),
+                        batch_mask_logits_per_layer,
+                        batch_class_logits_per_layer,
+                    )
+            ):
+                batch_crop_logits = self.model.to_per_pixel_logits_semantic(
+                    batch_mask_logits, batch_class_logits
+                )
+                crop_logits_per_layer[i].append(batch_crop_logits[:, :-1].detach())
+                # batch_block_loss = self.criterion(
+                #     masks_queries_logits=batch_mask_logits.detach(),
+                #     class_queries_logits=batch_class_logits.detach(),
+                #     targets=batch_binary_masks_crops,
+                #     invalids=batch_invalid_crops.clone().detach(),
+                # )
+                # batch_block_suffix = f"_block{batch_block_idx}" if batch_block_idx < num_blocks else ""
+                # batch_block_loss = {f"{k}{batch_block_suffix}": v for k, v in batch_block_loss.items()}
+                # losses.update({k: losses.get(k, []) + [v.detach()] for k, v in batch_block_loss.items()})
+        # losses = {k: torch.stack(v).mean() for k, v in losses.items()}
+
+        for i, crop_logits in enumerate(crop_logits_per_layer):
             h, w = crops.shape[-2:]
-            mask_logits = F.interpolate(mask_logits, (h, w), mode="bilinear")
-            crop_logits = self.model.to_per_pixel_logits_semantic(
-                mask_logits, class_logits
-            )
-            crop_logits = crop_logits[:, :-1]  # Drop ignore class logits.
-
-            # Un-tile the predictions.
-            logits = self.model.untile(
-                crop_logits=crop_logits, origins=origins, image_sizes=image_sizes
-            )
-
-            # Update the metrics.
+            crop_logits = F.interpolate(torch.cat(crop_logits, dim=0), (h, w), mode="bilinear")
+            logits = self.model.untile(crop_logits, origins=origins, image_sizes=image_sizes)
             self.update_metrics_semantic(
                 metrics=self.val_classwise_iou,
                 preds=logits,
@@ -426,18 +446,8 @@ class TIMMEoMTSemanticSegmentationTrain(TrainModel):
                 block_idx=i,
             )
 
-            # Compute the loss
-            block_losses = self.criterion(
-                masks_queries_logits=mask_logits,
-                class_queries_logits=class_logits,
-                targets=binary_masks_crops_dicts,
-            )
-            block_suffix = f"_block{block_idx}" if block_idx < num_blocks else ""
-            block_losses = {f"{k}{block_suffix}": v for k, v in block_losses.items()}
-            losses.update(block_losses)
-
         # Compute the total loss.
-        loss = self.criterion.loss_total(losses_all_layers=losses)
+        # loss = self.criterion.loss_total(losses_all_layers=losses)
 
         # Store the block-wise losses.
         log_dict = {
@@ -463,9 +473,9 @@ class TIMMEoMTSemanticSegmentationTrain(TrainModel):
                     metrics[f"val_metric_classwise/miou{block_suffix}"] = metric
 
         return TaskStepResult(
-            loss=loss,
+            loss=torch.tensor(0.0, dtype=torch.float32, device=fabric.device),
             log_dict={
-                "val_loss": loss.detach(),
+                "val_loss": torch.tensor(0.0, dtype=torch.float32, device=fabric.device),
                 **log_dict,
                 **metrics,
             },

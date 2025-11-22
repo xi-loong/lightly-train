@@ -44,6 +44,7 @@ class TIMMEoMTSemanticSegmentation(TaskModel):
         classes: dict[int, str],
         class_ignore_index: int | None,
         image_size: tuple[int, int],
+        stride_size: tuple[int, int],
         image_normalize: dict[str, tuple[float, ...]],
         num_queries: int,
         num_joint_blocks: int,
@@ -65,6 +66,8 @@ class TIMMEoMTSemanticSegmentation(TaskModel):
                 always assign a class to each pixel.
             image_size:
                 The size of the input images.
+            stride_size:
+                The stride size for sliding window inference, specified as (height_stride, width_stride).
             image_normalize:
                 A dict containing the mean and standard deviation for normalizing
                 the input images. The dict must contain the keys "mean" and "std".
@@ -91,6 +94,7 @@ class TIMMEoMTSemanticSegmentation(TaskModel):
         self.classes = classes
         self.class_ignore_index = class_ignore_index
         self.image_size = image_size
+        self.stride_size = stride_size
         self.image_normalize = image_normalize
 
         # Internally, the model processes classes as contiguous integers starting at 0.
@@ -256,12 +260,8 @@ class TIMMEoMTSemanticSegmentation(TaskModel):
         )
         # Crop size is the short side of the training image size. We resize the image
         # such that the short side of the image matches the crop size.
-        crop_size = min(self.image_size)
-        # (C, H, W) -> (C, H', W')
-        x = transforms_functional.resize(x, size=[crop_size])
-        x = x.unsqueeze(0)  # (1, C, H', W')
 
-        logits = self._forward_logits(x)  # (1, K+1, H', W'), K = len(self.classes)
+        logits = self._forward_logits([x])  # (1, K+1, H', W'), K = len(self.classes)
         # Restrict logits to known classes only.
         logits = logits[:, :-1]  # (1, K, H', W')
         logits = F.interpolate(
@@ -374,81 +374,119 @@ class TIMMEoMTSemanticSegmentation(TaskModel):
 
     # TODO(Guarin, 08/25): Move tile/until as functions to a separate utility module.
     def tile(
-        self, images: list[Tensor] | Tensor
-    ) -> tuple[list[Tensor], list[tuple[int, int, int, bool]]]:
-        crops, origins = [], []
+            self, images: list[Tensor]
+    ) -> tuple[list[Tensor], tuple[list[tuple[int, int, int]], list[tuple[int, int]]]]:
+        """Tile images into overlapping crops using sliding window approach.
+
+        Args:
+            images: List of tensors with shape [C, H, W] where C is the number of channels,
+                    H is the height, and W is the width.
+
+        Returns:
+            crops: List of cropped and padded tensors, each with shape [C, crop_h, crop_w]
+            origins: Tuple containing:
+                - crop_positions: List of tuples (image_index, h_start, w_start) indicating the
+                                  position of each crop in the original image
+                - crop_shapes: List of tuples (h, w) representing the original crop shapes
+                              before padding
+        """
+        crops, crop_positions, crop_shapes = [], [], []
+        crop_h, crop_w = self.image_size
+        stride_h, stride_w = self.stride_size
 
         for i, image in enumerate(images):
             h, w = image.shape[-2:]
-            long_side_size = max(h, w)
-            short_side_size = min(h, w)
 
-            # Is the image tall or wide?
-            is_tall = h > w
+            # Calculate number of crops in each dimension
+            h_grids = max(h - crop_h + stride_h - 1, 0) // stride_h + 1
+            w_grids = max(w - crop_w + stride_w - 1, 0) // stride_w + 1
 
-            # By construction the short side size is equal to the crop size.
-            crop_size = short_side_size
-            num_crops = math.ceil(long_side_size / crop_size)
-            overlap = num_crops * crop_size - long_side_size
-            overlap_per_crop = (overlap / (num_crops - 1)) if overlap > 0 else 0
+            for h_idx in range(h_grids):
+                for w_idx in range(w_grids):
+                    # Calculate crop coordinates
+                    h_start = h_idx * stride_h
+                    w_start = w_idx * stride_w
+                    h_end = min(h_start + crop_h, h)
+                    w_end = min(w_start + crop_w, w)
 
-            for j in range(num_crops):
-                start = int(j * (crop_size - overlap_per_crop))
-                end = start + crop_size
+                    # Adjust start to ensure fixed crop size if needed
+                    h_start = max(h_end - crop_h, 0)
+                    w_start = max(w_end - crop_w, 0)
 
-                # Image is tall.
-                if is_tall:
-                    crop = image[:, start:end, :]
+                    # Extract crop from original image
+                    crop = image[..., h_start:h_end, w_start:w_end]
+                    crop_shape = crop.shape[-2:]  # Store original shape
 
-                # Image is wide.
-                else:
-                    crop = image[:, :, start:end]
+                    # Always pad to fixed size for consistent model input
+                    pad_crop = torch.zeros((*image.shape[:-2], crop_h, crop_w),
+                                           dtype=image.dtype, device=image.device)
+                    pad_crop[..., :crop.shape[-2], :crop.shape[-1]] = crop
+                    crops.append(pad_crop)
 
-                # Store the crop.
-                crops.append(crop)
+                    # Store position information for reconstruction
+                    crop_positions.append((i, h_start, w_start))
+                    crop_shapes.append(crop_shape)
 
-                # Store the position of the crop.
-                origins.append((i, start, end, is_tall))
-
-        return crops, origins
+        return crops, (crop_positions, crop_shapes)
 
     def untile(
         self,
         crop_logits: Tensor,
-        origins: list[tuple[int, int, int, bool]],
+        origins: tuple[list[tuple[int, int, int]], list[tuple[int, int]]],
         image_sizes: list[tuple[int, int]],
     ) -> list[Tensor]:
-        logit_sums, logit_counts = [], []
+        """Combine cropped logits back into full images.
 
-        # Initialize the tensors containing the final predictions.
+        Args:
+            crop_logits: Tensor of shape [N, C, H, W] containing logits for each crop,
+                         where N is the number of crops, C is the number of classes,
+                         H is the crop height, and W is the crop width
+            origins: Tuple containing:
+                - crop_positions: List of tuples (image_index, h_start, w_start) from tile()
+                - crop_shapes: List of tuples (h, w) representing original crop shapes
+            image_sizes: List of original image sizes (H, W) for each image in the batch
+
+        Returns:
+            List of reconstructed logit tensors for each original image, each with
+            shape [C, H, W] where H and W are the original image dimensions
+        """
+        crop_positions, crop_shapes = origins
+
+        # Initialize accumulation tensors for each image
+        logit_sums = []
+        logit_counts = []
+
         for size in image_sizes:
             logit_sums.append(
-                crop_logits.new_zeros(
-                    (crop_logits.shape[1], *size),
-                )
+                torch.zeros((crop_logits.shape[1], *size), device=crop_logits.device)
             )
             logit_counts.append(
-                torch.zeros_like(
-                    logit_sums[-1],
-                    dtype=torch.int32,
-                )
+                torch.zeros((crop_logits.shape[1], *size), dtype=torch.uint8, device=crop_logits.device)
             )
 
-        for crop_index, (image_index, start, end, is_tall) in enumerate(origins):
-            # Image is tall.
-            if is_tall:
-                logit_sums[image_index][:, start:end, :] += crop_logits[crop_index]
-                logit_counts[image_index][:, start:end, :] += 1
-            # Image is wide.
-            else:
-                logit_sums[image_index][:, :, start:end] += crop_logits[crop_index]
-                logit_counts[image_index][:, :, start:end] += 1
+        # Accumulate logits from each crop
+        for crop_index, (image_index, h_start, w_start) in enumerate(crop_positions):
+            crop_h, crop_w = crop_shapes[crop_index]
+            crop_logit = crop_logits[crop_index]
 
-        # Average the logits in the regions of overlap.
-        return [
-            logit_sum / logit_count
-            for logit_sum, logit_count in zip(logit_sums, logit_counts)
-        ]
+            # Use only the valid part of the crop (before padding)
+            valid_logit = crop_logit[:, :crop_h, :crop_w]
+
+            # Add to the corresponding position in the full image
+            h_end = h_start + crop_h
+            w_end = w_start + crop_w
+
+            logit_sums[image_index][:, h_start:h_end, w_start:w_end] += valid_logit
+            logit_counts[image_index][:, h_start:h_end, w_start:w_end] += 1
+
+        # Average overlapping regions
+        results = []
+        for logit_sum, logit_count in zip(logit_sums, logit_counts):
+            # Avoid division by zero in areas without any coverage
+            result = logit_sum / logit_count
+            results.append(result)
+
+        return results
 
     def to_per_pixel_logits_semantic(
         self, mask_logits: Tensor, class_logits: Tensor
@@ -463,42 +501,37 @@ class TIMMEoMTSemanticSegmentation(TaskModel):
             class_logits.softmax(dim=-1),
         )
 
-    def _forward_logits(self, x: Tensor) -> Tensor:
+    def _forward_logits(self, x: list[Tensor]) -> list[Tensor]:
         """Forward pass that returns the logits of the last layer. Intended for
         inference."""
         # x is a batch of images with shape (B, C, H, W).
-        _, _, H, W = x.shape
-        # The current implementation of tile and untile leads to large amounts of memory being consumed when
-        # running the model as ONNX. Therefore we add a fallback for the case when these methods are not necessary.
-        use_onnx_fallback = torch.onnx.is_in_onnx_export() and H == W
 
         # Tiling.
-        if use_onnx_fallback:
-            crops = x
-        else:
-            image_sizes = [img.shape[-2:] for img in x]
-            crops_list, origins = self.tile(images=x)
-            crops = torch.stack(crops_list)
+        image_sizes = [img.shape[-2:] for img in x]
+        crops_list, origins = self.tile(images=x)
+        crops = torch.stack(crops_list)
         crop_h, crop_w = crops.shape[-2:]
 
         # Forward pass.
         # Only the logits of the last layer are returned.
-        mask_logits_per_layer, class_logits_per_layer = self.forward_train(
-            crops, return_logits_per_layer=False
-        )
-        mask_logits = mask_logits_per_layer[-1]
-        class_logits = class_logits_per_layer[-1]
+        crop_logits = []
+        for start in range(len(crops)):
+            batch_crops = crops[start:start + 1].detach()
 
-        # Interpolate and untile.
-        mask_logits = F.interpolate(mask_logits, (crop_h, crop_w), mode="bilinear")
-        crop_logits = self.to_per_pixel_logits_semantic(mask_logits, class_logits)
-        if use_onnx_fallback:
-            logits = crop_logits
-        else:
-            logits_list = self.untile(
-                crop_logits=crop_logits, origins=origins, image_sizes=image_sizes
+            batch_mask_logits_per_layer, batch_class_logits_per_layer = self.forward_train(
+                batch_crops, return_logits_per_layer=False
             )
-            logits = torch.stack(logits_list)  # (B, C, H, W)
+            batch_mask_logits = batch_mask_logits_per_layer[-1]
+            batch_class_logits = batch_class_logits_per_layer[-1]
+
+            # Interpolate and untile.
+            batch_mask_logits = F.interpolate(batch_mask_logits, (crop_h, crop_w), mode="bilinear")
+            batch_crop_logits = self.to_per_pixel_logits_semantic(batch_mask_logits, batch_class_logits)
+            crop_logits.append(batch_crop_logits.detach().cpu())
+        crop_logits = torch.cat(crop_logits)
+        logits = self.untile(
+            crop_logits=crop_logits, origins=origins, image_sizes=image_sizes
+        )
         return logits
 
     def _predict(self, x: Tensor, grid_size: tuple[int, int]) -> tuple[Tensor, Tensor]:
@@ -507,7 +540,7 @@ class TIMMEoMTSemanticSegmentation(TaskModel):
         class_logits = self.class_head(q)
 
         # num queries + 1 class token + num register tokens
-        x = x[:, self.num_queries + 1 + self.backbone.num_register_tokens :, :]
+        x = x[:, self.num_queries + 1 + self.backbone.num_reg_tokens :, :]
         x = x.transpose(1, 2).reshape(x.shape[0], -1, *grid_size)
 
         mask_logits = torch.einsum(

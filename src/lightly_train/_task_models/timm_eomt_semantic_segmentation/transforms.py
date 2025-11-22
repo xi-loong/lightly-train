@@ -84,6 +84,7 @@ class TIMMEoMTSemanticSegmentationTrainTransformArgs(
     scale_jitter: ScaleJitterArgs | None = Field(
         default_factory=TIMMEoMTSemanticSegmentationScaleJitterArgs
     )
+    random_scale: tuple[float, float] | None = None
     smallest_max_size: SmallestMaxSizeArgs | None = None
     random_crop: RandomCropArgs = Field(
         default_factory=TIMMEoMTSemanticSegmentationRandomCropArgs
@@ -121,12 +122,14 @@ class TIMMEoMTSemanticSegmentationValTransformArgs(SemanticSegmentationTransform
     """
 
     image_size: ImageSizeTuple | Literal["auto"] = "auto"
+    stride_size: tuple[int, int] | Literal["auto"] = "auto"
     channel_drop: ChannelDropArgs | None = None
     num_channels: int | Literal["auto"] = "auto"
     normalize: NormalizeArgs | Literal["auto"] = "auto"
     random_flip: RandomFlipArgs | None = None
     color_jitter: ColorJitterArgs | None = None
     scale_jitter: ScaleJitterArgs | None = None
+    random_scale: tuple[float, float] | None = None
     smallest_max_size: SmallestMaxSizeArgs | None = Field(
         default_factory=TIMMEoMTSemanticSegmentationSmallestMaxSizeArgs
     )
@@ -136,6 +139,9 @@ class TIMMEoMTSemanticSegmentationValTransformArgs(SemanticSegmentationTransform
         super().resolve_auto(model_init_args=model_init_args)
         if self.image_size == "auto":
             self.image_size = tuple(model_init_args.get("image_size", (518, 518)))
+
+        if self.stride_size == "auto":
+            self.stride_size = self.image_size[0] * 3 // 4, self.image_size[1] * 3 // 4
 
         height, width = self.image_size
         for field_name in self.__class__.model_fields:
