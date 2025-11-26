@@ -122,6 +122,8 @@ class TIMMEoMTSemanticSegmentationTrainArgs(TrainModelArgs):
                 if match is None:
                     if model_name in ['timm/hf-hub:bioptimus/H-optimus-0-eomt']:
                         model_size = 'vitg'
+                    elif model_name in ['timm/hf-hub:MahmoodLab/UNI2-h-eomt']:
+                        model_size = 'vitl'
                     else:
                         raise ValueError(
                             f"Unknown model name '{model_name}', "

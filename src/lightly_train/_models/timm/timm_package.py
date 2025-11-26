@@ -58,6 +58,22 @@ class TIMMPackage(Package):
                 f"Cannot create model '{model_name}' because timm is not installed."
             )
         args: dict[str, Any] = dict(pretrained=True, in_chans=num_input_channels)
+        if model_name == "hf-hub:MahmoodLab/UNI2-h":
+            args.update({
+                'patch_size': 14,
+                'depth': 24,
+                'num_heads': 24,
+                'init_values': 1e-5,
+                'embed_dim': 1536,
+                'mlp_ratio': 2.66667 * 2,
+                'num_classes': 0,
+                'no_embed_class': True,
+                'mlp_layer': timm.layers.SwiGLUPacked,
+                'act_layer': torch.nn.SiLU,
+                'reg_tokens': 8,
+                'dynamic_img_size': True
+            })
+
         # vit and eva models have dynamic_img_size defaulting to False, which would not allow inputs with varying image sizes, e.g., for DINO
         if (
             model_name.startswith("vit")
