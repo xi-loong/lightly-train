@@ -263,6 +263,7 @@ class TIMMEoMTSemanticSegmentation(TaskModel):
 
         logits = self._forward_logits([x])  # (1, K+1, H', W'), K = len(self.classes)
         # Restrict logits to known classes only.
+        logits = torch.cat(logits)
         logits = logits[:, :-1]  # (1, K, H', W')
         logits = F.interpolate(
             logits, size=(image_h, image_w), mode="bilinear"

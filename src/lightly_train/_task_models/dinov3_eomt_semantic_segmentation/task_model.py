@@ -282,6 +282,7 @@ class DINOv3EoMTSemanticSegmentation(TaskModel):
         # x = x.unsqueeze(0)  # (1, C, H', W')
 
         logits = self._forward_logits([x])  # (1, K+1, H', W'), K = len(self.classes)
+        logits = torch.cat(logits)
         # Restrict logits to known classes only.
         logits = logits[:, :-1]  # (1, K, H', W')
         logits = F.interpolate(
