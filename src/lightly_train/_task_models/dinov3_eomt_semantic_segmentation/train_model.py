@@ -289,7 +289,10 @@ class DINOv3EoMTSemanticSegmentationTrain(TrainModel):
         assert isinstance(images, Tensor), "Images must be a single tensor for training"
         masks = batch["mask"]
         binary_masks = batch["binary_masks"]
-        invalids = [(mask == self.model.class_ignore_index).unsqueeze(0) for mask in masks]
+        if self.model.class_ignore_index is None:
+            invalids = [torch.zeros_like(mask, dtype=torch.bool).unsqueeze(0) for mask in masks]
+        else:
+            invalids = [(mask == self.model.class_ignore_index).unsqueeze(0) for mask in masks]
         _, _, H, W = images.shape
 
         mask_logits_per_layer, class_logits_per_layer = self.model.forward_train(
@@ -381,7 +384,10 @@ class DINOv3EoMTSemanticSegmentationTrain(TrainModel):
         images = batch["image"]
         masks = batch["mask"]
         binary_masks = batch["binary_masks"]
-        invalids = [(mask == self.model.class_ignore_index).unsqueeze(0) for mask in masks]
+        if self.model.class_ignore_index is None:
+            invalids = [torch.zeros_like(mask, dtype=torch.bool).unsqueeze(0) for mask in masks]
+        else:
+            invalids = [(mask == self.model.class_ignore_index).unsqueeze(0) for mask in masks]
         image_sizes = [(image.shape[-2], image.shape[-1]) for image in images]
 
         # Tile the images.

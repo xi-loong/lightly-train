@@ -18,6 +18,7 @@ from lightly_train._transforms.semantic_segmentation_transform import (
 from lightly_train._transforms.transform import (
     ChannelDropArgs,
     ColorJitterArgs,
+    StainJitterArgs,
     NormalizeArgs,
     RandomCropArgs,
     RandomFlipArgs,
@@ -78,6 +79,7 @@ class TIMMEoMTSemanticSegmentationTrainTransformArgs(
     num_channels: int | Literal["auto"] = "auto"
     normalize: NormalizeArgs | Literal["auto"] = "auto"
     random_flip: RandomFlipArgs | None = Field(default_factory=RandomFlipArgs)
+    stain_jitter: StainJitterArgs | None = None
     color_jitter: TIMMEoMTSemanticSegmentationColorJitterArgs | None = Field(
         default_factory=TIMMEoMTSemanticSegmentationColorJitterArgs
     )
@@ -127,6 +129,7 @@ class TIMMEoMTSemanticSegmentationValTransformArgs(SemanticSegmentationTransform
     num_channels: int | Literal["auto"] = "auto"
     normalize: NormalizeArgs | Literal["auto"] = "auto"
     random_flip: RandomFlipArgs | None = None
+    stain_jitter: StainJitterArgs | None = None
     color_jitter: ColorJitterArgs | None = None
     scale_jitter: ScaleJitterArgs | None = None
     random_scale: tuple[float, float] | None = None

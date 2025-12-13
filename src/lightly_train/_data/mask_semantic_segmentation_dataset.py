@@ -252,7 +252,7 @@ class MaskSemanticSegmentationDataset(TaskDataset):
         # return the last transformed mask and proceed with training.
         for _ in range(20):
             # (H, W, C) -> (C, H, W)
-            transformed = self.transform({"image": image, "mask": mask})
+            transformed = self.transform({"image": image, "mask": mask, "info": row})
             if self.is_mask_valid(transformed["mask"]):
                 break
 

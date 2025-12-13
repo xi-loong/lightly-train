@@ -9,12 +9,14 @@
 from __future__ import annotations
 
 import logging
+import os.path
 from typing import Any, Literal
 
 import numpy as np
 from albumentations import (
     BasicTransform,
     ColorJitter,
+    StainJitter,
     Compose,
     HorizontalFlip,
     OneOf,
@@ -40,13 +42,14 @@ from lightly_train._transforms.task_transform import (
 from lightly_train._transforms.transform import (
     ChannelDropArgs,
     ColorJitterArgs,
+    StainJitterArgs,
     NormalizeArgs,
     RandomCropArgs,
     RandomFlipArgs,
     ScaleJitterArgs,
     SmallestMaxSizeArgs,
 )
-from lightly_train.types import ImageSizeTuple, NDArrayImage, NDArrayMask
+from lightly_train.types import ImageSizeTuple, NDArrayImage, NDArrayMask, Dict
 
 logger = logging.getLogger(__name__)
 
@@ -54,6 +57,7 @@ logger = logging.getLogger(__name__)
 class SemanticSegmentationTransformInput(TaskTransformInput):
     image: NDArrayImage
     mask: NotRequired[NDArrayMask]
+    info: NotRequired[Dict[str, Any]]
 
 
 class SemanticSegmentationTransformOutput(TaskTransformOutput):
@@ -68,6 +72,7 @@ class SemanticSegmentationTransformArgs(TaskTransformArgs):
     num_channels: int | Literal["auto"]
     normalize: NormalizeArgs | Literal["auto"]
     random_flip: RandomFlipArgs | None
+    stain_jitter: StainJitterArgs | None
     color_jitter: ColorJitterArgs | None
     # TODO: Lionel(09/25): These are currently not fully used.
     scale_jitter: ScaleJitterArgs | None
@@ -115,6 +120,13 @@ class SemanticSegmentationTransformArgs(TaskTransformArgs):
                 f"images but num_channels is {num_channels}."
             )
             self.color_jitter = None
+
+        if self.stain_jitter is not None and num_channels != 3:
+            logger.debug(
+                "Disabling stain jitter transform as it only supports 3-channel "
+                f"images but num_channels is {num_channels}."
+            )
+            self.stain_jitter = None
 
 
 class SemanticSegmentationTransform(TaskTransform):
@@ -202,6 +214,16 @@ class SemanticSegmentationTransform(TaskTransform):
             if transform_args.random_flip.vertical_prob > 0.0:
                 transform += [VerticalFlip(p=transform_args.random_flip.vertical_prob)]
 
+        if transform_args.stain_jitter is not None:
+            transform += [
+                StainJitter(
+                    path=transform_args.stain_jitter.path,
+                    alpha=transform_args.stain_jitter.alpha,
+                    beta=transform_args.stain_jitter.beta,
+                    p=transform_args.stain_jitter.prob,
+                )
+            ]
+
         # Optionally apply color jitter.
         if transform_args.color_jitter is not None:
             transform += [
@@ -230,10 +252,13 @@ class SemanticSegmentationTransform(TaskTransform):
         transform += [ToTensorV2()]
 
         # Create the final transform.
-        self.transform = Compose(transform, additional_targets={"mask": "mask"})
+        self.transform = Compose(transform, additional_targets={"mask": "mask", "info": "info"})
 
     def __call__(
         self, input: SemanticSegmentationTransformInput
     ) -> SemanticSegmentationTransformOutput:
-        transformed = self.transform(image=input["image"], mask=input["mask"])
+        image_filepaths = input["info"]["image_filepaths"]
+        _, filename = os.path.split(image_filepaths)
+        uid, _ = os.path.splitext(filename)
+        transformed = self.transform(image=input["image"], mask=input["mask"], uid=uid)
         return {"image": transformed["image"], "mask": transformed["mask"]}

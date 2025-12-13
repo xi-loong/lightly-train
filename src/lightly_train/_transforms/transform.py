@@ -94,6 +94,13 @@ class RandomZoomOutArgs(PydanticConfig):
     side_range: tuple[float, float] = Field(strict=False)
 
 
+class StainJitterArgs(PydanticConfig):
+    prob: float = 0.75
+    path: str
+    alpha: float = 0.1
+    beta: float = 0.1
+
+
 class ColorJitterArgs(PydanticConfig):
     prob: float  # Probability to apply ColorJitter
     strength: float  # Multiplier for the parameters below
@@ -212,6 +219,7 @@ class MethodTransformArgs(PydanticConfig):
     random_resize: RandomResizeArgs | None
     random_flip: RandomFlipArgs | None
     random_rotation: RandomRotationArgs | None
+    stain_jitter: StainJitterArgs | None
     color_jitter: ColorJitterArgs | None
     random_gray_scale: float | None
     normalize: NormalizeArgs
@@ -257,6 +265,12 @@ class MethodTransformArgs(PydanticConfig):
                 f"images but num_channels is {self.num_channels}."
             )
             self.color_jitter = None
+        if self.stain_jitter is not None and no_auto(self.num_channels) != 3:
+            logger.debug(
+                "Disabling stain jitter transform as it only supports 3-channel "
+                f"images but num_channels is {self.num_channels}."
+            )
+            self.stain_jitter = None
         if self.random_gray_scale is not None and no_auto(self.num_channels) != 3:
             logger.debug(
                 "Disabling random gray scale transform as it only supports 3-channel "
