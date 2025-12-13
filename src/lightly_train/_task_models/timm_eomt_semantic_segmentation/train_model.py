@@ -24,6 +24,7 @@ from lightly_train._data.mask_semantic_segmentation_dataset import (
     MaskSemanticSegmentationDataArgs,
 )
 from lightly_train._task_checkpoint import TaskSaveCheckpointArgs
+from lightly_train._task_models import train_model_helpers
 from lightly_train._task_models.timm_eomt_semantic_segmentation.scheduler import (
     TwoStageWarmupPolySchedule,
 )
@@ -274,6 +275,15 @@ class TIMMEoMTSemanticSegmentationTrain(TrainModel):
                 for _ in range(num_joint_blocks + 1)
             ]
         )
+        if hasattr(self, "register_load_state_dict_pre_hook"):
+            self.register_load_state_dict_pre_hook(  # type: ignore[no-untyped-call]
+                train_model_helpers.criterion_empty_weight_reinit_hook
+            )
+        else:
+            # Backwards compatibility for PyTorch <= 2.4
+            self._register_load_state_dict_pre_hook(  # type: ignore[no-untyped-call]
+                train_model_helpers.criterion_empty_weight_reinit_hook, with_module=True
+            )
 
     def get_task_model(self) -> TIMMEoMTSemanticSegmentation:
         return self.model

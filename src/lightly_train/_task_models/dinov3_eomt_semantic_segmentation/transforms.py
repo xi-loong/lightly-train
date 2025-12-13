@@ -140,7 +140,7 @@ class DINOv3EoMTSemanticSegmentationValTransformArgs(SemanticSegmentationTransfo
         super().resolve_auto(model_init_args=model_init_args)
         if self.image_size == "auto":
             self.image_size = tuple(model_init_args.get("image_size", (518, 518)))
-            assert isinstance(image_size, tuple)
+            assert isinstance(self.image_size, tuple)
 
         if self.stride_size == "auto":
             self.stride_size = self.image_size[0] * 3 // 4, self.image_size[1] * 3 // 4
